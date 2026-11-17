@@ -6,7 +6,6 @@ A Zotero plugin to convert scanned PDFs to searchable PDFs using ocrmypdf.
 
 - **Right-click context menu**: Right-click on a PDF item and select "Convert to Searchable PDF"
 - **Toolbar button**: Click the toolbar button to OCR selected PDF(s)
-- **Keyboard shortcut**: Press `Ctrl+Shift+O` to run OCR on selected PDFs
 
 ## Requirements
 
@@ -34,7 +33,11 @@ Or build from source:
 
 1. Select one or more PDF attachments in Zotero
 2. Right-click and select "Convert to Searchable PDF", or use the toolbar button
-3. The PDF will be processed and replaced with the OCR'd version
+3. ocrmypdf writes `name.ocr.pdf` next to the original and the attachment is pointed at it
+
+Pages that already have text are left untouched (`--skip-text`), so running it on a born-digital or already-OCR'd PDF is safe. Re-running on a `.ocr.pdf` updates that file in place instead of creating `.ocr.ocr.pdf`.
+
+Works with Zotero 7 through 10.
 
 ## Configuration
 

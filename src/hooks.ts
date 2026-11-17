@@ -1,8 +1,15 @@
 import { config } from "../package.json";
+import { ocrArgs, ocrOutputPath } from "./utils/ocrPlan";
 
-// Track registered windows to avoid double-registration in Zotero 9
-// where bootstrap calls onMainWindowLoad for ALL existing windows on startup
-const registeredWindows = new Set<any>();
+const MENU_ITEM_ID = "zotero-ocrmypdf-item";
+const SETTINGS_ITEM_ID = "zotero-ocrmypdf-settings-item";
+const SETTINGS_SEP_ID = "zotero-ocrmypdf-settings-sep";
+const TOOLBAR_BUTTON_ID = "zotero-ocrmypdf-tb-ocr";
+const ICON_URI = `chrome://${config.addonRef}/content/icons/favicon.svg`;
+
+// Per-window listeners, so each window is registered once (bootstrap calls
+// onMainWindowLoad for existing windows too) and can be cleaned up on unload.
+const registeredWindows = new Map<any, (e: Event) => void>();
 
 async function onStartup() {
   await Promise.all([
@@ -15,7 +22,7 @@ async function onStartup() {
   const windows = Zotero.getMainWindows();
   Zotero.debug(`[${config.addonName}] onStartup: found ${windows.length} open windows`);
   for (const win of windows) {
-    registerMenuItem(win);
+    registerWindow(win);
   }
 
   addon.data.initialized = true;
@@ -25,21 +32,16 @@ async function onStartup() {
 // onMainWindowLoad is called by bootstrap for new windows AND existing windows on startup.
 // Only register if not already registered to avoid double-registration.
 async function onMainWindowLoad(win: any) {
-  if (!registeredWindows.has(win)) {
-    registerMenuItem(win);
-  }
+  registerWindow(win);
 }
 
 async function onMainWindowUnload(win: any) {
-  registeredWindows.delete(win);
-  const existing = win.document.getElementById("zotero-ocrmypdf-item");
-  if (existing) existing.remove();
+  unregisterWindow(win);
 }
 
 function onShutdown() {
-  for (const win of Zotero.getMainWindows()) {
-    const existing = win.document.getElementById("zotero-ocrmypdf-item");
-    if (existing) existing.remove();
+  for (const win of [...registeredWindows.keys()]) {
+    unregisterWindow(win);
   }
   addon.data.alive = false;
   // @ts-expect-error
@@ -53,34 +55,69 @@ async function onNotify(event: string, type: string, ids: Array<string | number>
 async function onPrefsEvent(type: string, data: any) {}
 function onShortcuts(type: string) {}
 
-function registerMenuItem(win: any) {
+function registerWindow(win: any) {
+  if (registeredWindows.has(win)) return;
   const doc = win.document;
 
-  doc.addEventListener("popupshowing", (event: Event) => {
-    const popup = event.target as Element;
+  const popup = (event: Event) => {
+    const popupEl = event.target as Element;
 
-    if (popup.id === "zotero-itemmenu" && !doc.getElementById("zotero-ocrmypdf-item")) {
+    if (popupEl.id === "zotero-itemmenu" && !doc.getElementById(MENU_ITEM_ID)) {
       const menuitem = (doc as any).createXULElement("menuitem");
-      menuitem.setAttribute("id", "zotero-ocrmypdf-item");
+      menuitem.setAttribute("id", MENU_ITEM_ID);
       menuitem.setAttribute("label", "Convert to Searchable PDF");
       menuitem.setAttribute("accesskey", "O");
-      menuitem.setAttribute("icon", "chrome://zotero-ocrmypdf/content/icons/favicon.svg");
+      menuitem.setAttribute("icon", ICON_URI);
       menuitem.addEventListener("command", () => onConvertOCR());
-      popup.appendChild(menuitem);
+      popupEl.appendChild(menuitem);
     }
 
-    if (popup.id === "menu_ToolsPopup" && !doc.getElementById("zotero-ocrmypdf-settings-item")) {
+    if (popupEl.id === "menu_ToolsPopup" && !doc.getElementById(SETTINGS_ITEM_ID)) {
       const sep = (doc as any).createXULElement("menuseparator");
-      sep.id = "zotero-ocrmypdf-settings-sep";
+      sep.id = SETTINGS_SEP_ID;
       const settingsItem = (doc as any).createXULElement("menuitem");
-      settingsItem.id = "zotero-ocrmypdf-settings-item";
+      settingsItem.id = SETTINGS_ITEM_ID;
       settingsItem.setAttribute("label", config.addonName + " Settings");
       settingsItem.setAttribute("accesskey", "S");
       settingsItem.addEventListener("command", () => openSettings());
-      popup.appendChild(sep);
-      popup.appendChild(settingsItem);
+      popupEl.appendChild(sep);
+      popupEl.appendChild(settingsItem);
     }
-  });
+  };
+
+  doc.addEventListener("popupshowing", popup);
+  addToolbarButton(doc);
+  registeredWindows.set(win, popup);
+}
+
+function addToolbarButton(doc: any) {
+  if (doc.getElementById(TOOLBAR_BUTTON_ID)) return;
+  const toolbar = doc.getElementById("zotero-items-toolbar");
+  if (!toolbar) {
+    Zotero.debug(`[${config.addonName}] items toolbar not found; skipping toolbar button`);
+    return;
+  }
+  const button = doc.createXULElement("toolbarbutton");
+  button.id = TOOLBAR_BUTTON_ID;
+  button.setAttribute("class", "zotero-tb-button");
+  button.setAttribute("tabindex", "-1");
+  button.setAttribute("tooltiptext", "Convert selected PDFs to searchable PDFs");
+  button.style.listStyleImage = `url("${ICON_URI}")`;
+  button.addEventListener("command", () => onConvertOCR());
+  // Place it with the other item buttons, before the spacer that pushes search right.
+  const spacer = toolbar.querySelector(":scope > spacer");
+  toolbar.insertBefore(button, spacer || null);
+}
+
+function unregisterWindow(win: any) {
+  const popup = registeredWindows.get(win);
+  if (popup) {
+    win.document.removeEventListener("popupshowing", popup);
+    registeredWindows.delete(win);
+  }
+  for (const id of [MENU_ITEM_ID, SETTINGS_ITEM_ID, SETTINGS_SEP_ID, TOOLBAR_BUTTON_ID]) {
+    win.document.getElementById(id)?.remove();
+  }
 }
 
 function openSettings() {
@@ -122,10 +159,8 @@ async function onConvertOCR() {
   for (const item of pdfItems) {
     const inputPath = item.getFilePath();
     if (!inputPath) continue;
-    const outputPath = inputPath.replace(".pdf", ".ocr.pdf");
-
-    // Newer ocrmypdf (v15+): input/output are positional, --force overwrites existing output
-    const args = [inputPath, outputPath, "-l", language, deskew ? "--deskew" : "--no-deskew", "--force"];
+    const outputPath = ocrOutputPath(inputPath);
+    const args = ocrArgs(inputPath, outputPath, String(language), deskew);
 
     showProgress(`OCR: ${item.getDisplayTitle()}`, "default");
 

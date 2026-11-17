@@ -72,18 +72,23 @@ async function build() {
     }
   });
 
-  // 5. Post-process: fix deprecated ChromeUtils.import() → ChromeUtils.importESModule()
+  // 5. Post-process: zotero-plugin-toolkit's _importESModule polyfill rewrites
+  //    "*.sys.mjs" → "*.jsm" whenever ChromeUtils.import exists. Zotero 10 still
+  //    defines ChromeUtils.import but no longer ships the .jsm files, so startup
+  //    dies on AddonManager.jsm. Every Zotero we support (>=7) has
+  //    importESModule, so always load the .sys.mjs path as-is.
   const jsFile = `./builds/addon/chrome/content/scripts/${addonRef}.js`;
-  if (fs.existsSync(jsFile)) {
-    let js = fs.readFileSync(jsFile, "utf8");
-    // Patch the _importESModule polyfill: ChromeUtils.import(path) → importESModule
-    js = js.replace(
-      /ChromeUtils\.import\(([^)]+)\)/g,
-      (match, args) => `ChromeUtils.importESModule(${args}, { global: "contextual" })`,
-    );
-    fs.writeFileSync(jsFile, js, "utf8");
-    console.log("  ✓ Patched ChromeUtils.import → importESModule");
+  let js = fs.readFileSync(jsFile, "utf8");
+  const polyfill = /function _importESModule\(path\) \{[\s\S]*?\n  \}/;
+  if (!polyfill.test(js)) {
+    throw new Error("toolkit _importESModule polyfill not found; review the build patch");
   }
+  js = js.replace(
+    polyfill,
+    'function _importESModule(path) {\n    return ChromeUtils.importESModule(path, { global: "contextual" });\n  }',
+  );
+  fs.writeFileSync(jsFile, js, "utf8");
+  console.log("  ✓ Patched toolkit _importESModule to load .sys.mjs directly");
 
   // 6. Zip into .xpi (relative path from inside addon dir is ../)
   const xpiPath = path.join(buildsDir, `${addonRef}.xpi`);

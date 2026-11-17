@@ -1,13 +1,14 @@
 {
   "name": "zotero-ocrmypdf",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Zotero plugin to convert scanned PDFs to searchable PDFs using ocrmypdf",
   "main": "src/index.ts",
   "scripts": {
     "build": "node scripts/build.js",
     "build-dev": "NODE_ENV=development node scripts/build.js",
     "package": "node scripts/package.js",
-    "release": "release-it"
+    "release": "release-it",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [
     "zotero",
